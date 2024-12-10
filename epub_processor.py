@@ -3,7 +3,8 @@ import logging
 from typing import List, Tuple
 from services.epub_service import EPUBService
 from services.translation_service import TranslationService
-from utils.validation import validate_epub_file
+from utils.validation import validate_epub_file, validate_translation
+from utils.content_processor import ContentProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ def process_epub(input_file: str, input_dir: str, output_dir: str) -> str:
     try:
         epub_service = EPUBService(input_path)
         translator = TranslationService()
+        content_processor = ContentProcessor()
         
         # Extract content with all metadata
         contents = epub_service.extract_content()
@@ -45,10 +47,23 @@ def process_epub(input_file: str, input_dir: str, output_dir: str) -> str:
         translated_contents = []
         for i, (file_name, content, spine_pos, item_id) in enumerate(contents, 1):
             logger.info(f"Translating item {i}/{total}: {file_name}")
-            translated_text = translator.translate_html_content(content)
+            
+            # Clean and validate content before translation
+            cleaned_content = content_processor.clean_content(content)
+            if not cleaned_content:
+                logger.warning(f"Skipping invalid content in {file_name}")
+                continue
+                
+            translated_text = translator.translate_html_content(cleaned_content)
             if not translated_text:
                 logger.warning(f"Empty translation for {file_name}")
                 continue
+                
+            # Validate translation
+            if not validate_translation(cleaned_content, translated_text):
+                logger.warning(f"Invalid translation for {file_name}")
+                continue
+                
             translated_contents.append((file_name, translated_text))
         
         if not translated_contents:
