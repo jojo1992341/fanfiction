@@ -11,6 +11,7 @@ from config.settings import (
     RATE_LIMIT_DELAY
 )
 from .translation_validator import TranslationValidator
+from .translation_retry_handler import TranslationRetryHandler
 from utils.content_processor import ContentProcessor
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,7 @@ class TranslationService:
         self.base_url = 'https://translate.googleapis.com/translate_a/single'
         self.validator = TranslationValidator()
         self.content_processor = ContentProcessor()
+        self.retry_handler = TranslationRetryHandler()
 
     def translate_html_content(self, html_content: str) -> Optional[str]:
         """Translate HTML content while preserving structure."""
@@ -37,7 +39,7 @@ class TranslationService:
             translatable_elements = self._extract_translatable_elements(soup)
             
             for element, text in translatable_elements:
-                translated_text = self._translate_text(text)
+                translated_text = self._translate_text_with_retry(text)
                 if translated_text and translated_text != text:
                     element.string = translated_text
 
@@ -67,6 +69,11 @@ class TranslationService:
 
         return elements
 
+    @TranslationRetryHandler.with_retry
+    def _translate_text_with_retry(self, text: str) -> Optional[str]:
+        """Translate text with retry mechanism."""
+        return self._translate_text(text)
+
     def _translate_text(self, text: str) -> Optional[str]:
         """Translate a single text using Google Translate API."""
         if not text.strip():
@@ -92,7 +99,7 @@ class TranslationService:
 
         except Exception as e:
             logger.error(f"Translation error: {str(e)}")
-            return None
+            raise  # Re-raise for retry handler
 
     def translate_batch(
         self,
@@ -112,7 +119,7 @@ class TranslationService:
                 translated_text = (
                     self.translate_html_content(text)
                     if self._is_html_content(text)
-                    else self._translate_text(text)
+                    else self._translate_text_with_retry(text)
                 )
                 translated_batch.append(translated_text or text)
 
