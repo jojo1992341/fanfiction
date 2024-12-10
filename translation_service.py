@@ -1,7 +1,8 @@
-from typing import List, Optional
+"""Service for translating content."""
+import logging
 import requests
 import time
-import logging
+from typing import List, Optional
 from bs4 import BeautifulSoup
 from config.settings import (
     DEFAULT_SOURCE_LANG,
@@ -9,6 +10,8 @@ from config.settings import (
     BATCH_SIZE,
     RATE_LIMIT_DELAY
 )
+from .translation_validator import TranslationValidator
+from utils.content_processor import ContentProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -21,72 +24,75 @@ class TranslationService:
         self.source_lang = source_lang
         self.target_lang = target_lang
         self.base_url = 'https://translate.googleapis.com/translate_a/single'
+        self.validator = TranslationValidator()
+        self.content_processor = ContentProcessor()
 
-    def extract_text_from_html(self, html_content: str) -> List[tuple[str, str]]:
-        """Extract translatable text from HTML while preserving structure."""
-        soup = BeautifulSoup(html_content, 'html.parser')
-        translatable_elements = []
-        
-        # Define tags whose content should be translated
+    def translate_html_content(self, html_content: str) -> Optional[str]:
+        """Translate HTML content while preserving structure."""
+        if not html_content.strip():
+            return None
+
+        try:
+            soup = BeautifulSoup(html_content, 'html.parser')
+            translatable_elements = self._extract_translatable_elements(soup)
+            
+            for element, text in translatable_elements:
+                translated_text = self._translate_text(text)
+                if translated_text and translated_text != text:
+                    element.string = translated_text
+
+            translated_content = str(soup)
+            
+            # Validate translation
+            if not self.validator.validate_translation(html_content, translated_content):
+                logger.warning("Translation validation failed")
+                return None
+
+            return translated_content
+
+        except Exception as e:
+            logger.error(f"HTML translation error: {str(e)}")
+            return None
+
+    def _extract_translatable_elements(self, soup: BeautifulSoup) -> List[tuple]:
+        """Extract elements that need translation."""
         translatable_tags = {'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'td', 'th', 'div', 'span'}
-        
+        elements = []
+
         for tag in soup.find_all():
             if tag.name in translatable_tags and tag.string:
                 text = tag.string.strip()
                 if text:
-                    translatable_elements.append((str(tag), text))
-                    
-        return translatable_elements
+                    elements.append((tag, text))
 
-    def translate_text(self, text: str) -> str:
+        return elements
+
+    def _translate_text(self, text: str) -> Optional[str]:
         """Translate a single text using Google Translate API."""
         if not text.strip():
-            return text
-
-        params = {
-            'client': 'gtx',
-            'sl': self.source_lang,
-            'tl': self.target_lang,
-            'dt': 't',
-            'q': text
-        }
+            return None
 
         try:
+            params = {
+                'client': 'gtx',
+                'sl': self.source_lang,
+                'tl': self.target_lang,
+                'dt': 't',
+                'q': text
+            }
+
             response = requests.get(self.base_url, params=params)
             response.raise_for_status()
+            
             result = response.json()
             translated_text = ''.join(x[0] for x in result[0] if x[0])
+            
             logger.debug(f"Translated: {text[:50]}... -> {translated_text[:50]}...")
             return translated_text
+
         except Exception as e:
             logger.error(f"Translation error: {str(e)}")
-            return text
-
-    def translate_html_content(self, html_content: str) -> str:
-        """Translate HTML content while preserving structure."""
-        if not html_content.strip():
-            return html_content
-            
-        try:
-            soup = BeautifulSoup(html_content, 'html.parser')
-            translatable_elements = self.extract_text_from_html(html_content)
-            
-            for original_tag, text in translatable_elements:
-                translated_text = self.translate_text(text)
-                if translated_text != text:
-                    # Create a new tag with translated content
-                    new_tag = BeautifulSoup(original_tag, 'html.parser')
-                    new_tag.string = translated_text
-                    # Replace the original tag in the soup
-                    old_tag = soup.find(string=text)
-                    if old_tag:
-                        old_tag.replace_with(translated_text)
-                        
-            return str(soup)
-            
-        except Exception as e:
-            logger.error(f"HTML translation error: {str(e)}")
-            return html_content
+            return None
 
     def translate_batch(
         self,
@@ -101,14 +107,15 @@ class TranslationService:
         for i in range(0, total_texts, batch_size):
             batch = texts[i:i + batch_size]
             translated_batch = []
-            
+
             for text in batch:
-                if self.is_html_content(text):
-                    translated_text = self.translate_html_content(text)
-                else:
-                    translated_text = self.translate_text(text)
-                translated_batch.append(translated_text)
-                
+                translated_text = (
+                    self.translate_html_content(text)
+                    if self._is_html_content(text)
+                    else self._translate_text(text)
+                )
+                translated_batch.append(translated_text or text)
+
             translated_texts.extend(translated_batch)
 
             if progress_callback:
@@ -120,6 +127,6 @@ class TranslationService:
         return translated_texts
 
     @staticmethod
-    def is_html_content(text: str) -> bool:
+    def _is_html_content(text: str) -> bool:
         """Check if the text contains HTML markup."""
         return bool(BeautifulSoup(text, 'html.parser').find())
