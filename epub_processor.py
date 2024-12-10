@@ -1,8 +1,8 @@
 """EPUB processing service."""
 import logging
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 from services.epub_service import EPUBService
-from services.translation_service import TranslationService
+from services.parallel_translation_service import ParallelTranslationService
 from utils.validation import validate_epub_file, validate_translation
 from utils.content_processor import ContentProcessor
 
@@ -32,7 +32,7 @@ def process_epub(input_file: str, input_dir: str, output_dir: str) -> str:
     
     try:
         epub_service = EPUBService(input_path)
-        translator = TranslationService()
+        translator = ParallelTranslationService()
         content_processor = ContentProcessor()
         
         # Extract content with all metadata
@@ -43,24 +43,29 @@ def process_epub(input_file: str, input_dir: str, output_dir: str) -> str:
         total = len(contents)
         logger.info(f"Extracted {total} items to translate")
         
+        # Prepare content map for parallel translation
+        content_map = {}
+        for file_name, content, spine_pos, item_id in contents:
+            cleaned_content = content_processor.clean_content(content)
+            if cleaned_content:
+                content_map[file_name] = cleaned_content
+        
+        if not content_map:
+            raise RuntimeError("No valid content to translate")
+        
+        # Translate content in parallel
+        logger.info("Starting parallel translation")
+        translated_map = translator.translate_content(content_map)
+        
         # Prepare translated contents maintaining the original structure
         translated_contents = []
-        for i, (file_name, content, spine_pos, item_id) in enumerate(contents, 1):
-            logger.info(f"Translating item {i}/{total}: {file_name}")
-            
-            # Clean and validate content before translation
-            cleaned_content = content_processor.clean_content(content)
-            if not cleaned_content:
-                logger.warning(f"Skipping invalid content in {file_name}")
-                continue
-                
-            translated_text = translator.translate_html_content(cleaned_content)
+        for file_name, translated_text in translated_map.items():
             if not translated_text:
                 logger.warning(f"Empty translation for {file_name}")
                 continue
                 
             # Validate translation
-            if not validate_translation(cleaned_content, translated_text):
+            if not validate_translation(content_map[file_name], translated_text):
                 logger.warning(f"Invalid translation for {file_name}")
                 continue
                 
