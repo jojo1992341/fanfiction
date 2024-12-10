@@ -13,6 +13,7 @@ from config.settings import (
 from .translation_validator import TranslationValidator
 from .translation_retry_handler import TranslationRetryHandler
 from utils.content_processor import ContentProcessor
+from utils.text_chunker import TextChunker
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ class TranslationService:
         self.validator = TranslationValidator()
         self.content_processor = ContentProcessor()
         self.retry_handler = TranslationRetryHandler()
+        self.text_chunker = TextChunker()
 
     def translate_html_content(self, html_content: str) -> Optional[str]:
         """Translate HTML content while preserving structure."""
@@ -39,9 +41,21 @@ class TranslationService:
             translatable_elements = self._extract_translatable_elements(soup)
             
             for element, text in translatable_elements:
-                translated_text = self.retry_handler.with_retry(self._translate_text)(text)
-                if translated_text and translated_text != text:
-                    element.string = translated_text
+                if not text.strip():
+                    continue
+                    
+                # Split text into smaller chunks
+                chunks = self.text_chunker.split_into_chunks(text)
+                translated_chunks = []
+                
+                for chunk in chunks:
+                    translated_chunk = self.retry_handler.with_retry(self._translate_text)(chunk)
+                    if translated_chunk:
+                        translated_chunks.append(translated_chunk)
+                        time.sleep(RATE_LIMIT_DELAY)  # Respect rate limits between chunks
+                
+                if translated_chunks:
+                    element.string = ' '.join(translated_chunks)
 
             translated_content = str(soup)
             
@@ -89,7 +103,7 @@ class TranslationService:
             result = response.json()
             translated_text = ''.join(x[0] for x in result[0] if x[0])
             
-            logger.debug(f"Translated: {text[:50]}... -> {translated_text[:50]}...")
+            logger.debug(f"Translated chunk: {text[:50]}... -> {translated_text[:50]}...")
             return translated_text
 
         except Exception as e:
@@ -111,11 +125,21 @@ class TranslationService:
             translated_batch = []
 
             for text in batch:
-                translated_text = (
-                    self.translate_html_content(text)
-                    if self._is_html_content(text)
-                    else self.retry_handler.with_retry(self._translate_text)(text)
-                )
+                if self._is_html_content(text):
+                    translated_text = self.translate_html_content(text)
+                else:
+                    # Split non-HTML text into chunks as well
+                    chunks = self.text_chunker.split_into_chunks(text)
+                    translated_chunks = []
+                    
+                    for chunk in chunks:
+                        translated_chunk = self.retry_handler.with_retry(self._translate_text)(chunk)
+                        if translated_chunk:
+                            translated_chunks.append(translated_chunk)
+                            time.sleep(RATE_LIMIT_DELAY)
+                            
+                    translated_text = ' '.join(translated_chunks) if translated_chunks else None
+                
                 translated_batch.append(translated_text or text)
 
             translated_texts.extend(translated_batch)
