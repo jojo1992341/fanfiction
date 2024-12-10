@@ -2,8 +2,10 @@
 import os
 import logging
 from typing import List
+from .content_processor import ContentProcessor
 
 logger = logging.getLogger(__name__)
+content_processor = ContentProcessor()
 
 def validate_epub_file(file_path: str) -> bool:
     """
@@ -27,6 +29,12 @@ def validate_epub_file(file_path: str) -> bool:
         logger.error(f"Empty file: {file_path}")
         return False
         
+    # Check file size is reasonable (between 10KB and 2GB)
+    size = os.path.getsize(file_path)
+    if size < 10 * 1024 or size > 2 * 1024 * 1024 * 1024:
+        logger.error(f"Invalid file size: {size} bytes")
+        return False
+        
     return True
 
 def validate_html_content(content: str) -> bool:
@@ -39,8 +47,37 @@ def validate_html_content(content: str) -> bool:
     Returns:
         bool: True if valid, False otherwise
     """
-    if not content or not content.strip():
-        logger.warning("Empty HTML content")
+    return content_processor.is_valid_content(content)
+
+def validate_translation(original: str, translated: str) -> bool:
+    """
+    Validate if translation appears reasonable.
+    
+    Args:
+        original: Original text
+        translated: Translated text
+        
+    Returns:
+        bool: True if valid, False otherwise
+    """
+    if not original or not translated:
+        return False
+        
+    # Check if lengths are reasonably proportional
+    orig_len = len(original)
+    trans_len = len(translated)
+    ratio = trans_len / orig_len if orig_len > 0 else 0
+    
+    if ratio < 0.3 or ratio > 3.0:
+        logger.warning(f"Suspicious translation length ratio: {ratio:.2f}")
+        return False
+        
+    # Check if both have some common structure
+    orig_blocks = content_processor.extract_text_blocks(original)
+    trans_blocks = content_processor.extract_text_blocks(translated)
+    
+    if len(orig_blocks) != len(trans_blocks):
+        logger.warning("Mismatch in number of text blocks")
         return False
         
     return True
