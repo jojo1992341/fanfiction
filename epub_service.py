@@ -56,6 +56,34 @@ class EPUBService:
             if item.get_type() not in [ebooklib.ITEM_DOCUMENT, ebooklib.ITEM_NAVIGATION]:
                 new_book.add_item(item)
 
+    def copy_metadata(self, new_book: epub.EpubBook):
+        """Copy metadata from original book to new book."""
+        try:
+            # Copy basic metadata
+            if hasattr(self.book, 'title'):
+                new_book.set_title(f"{self.book.title} (Traduit)")
+            
+            if hasattr(self.book, 'language'):
+                new_book.set_language('fr')  # Set to French for translated version
+            
+            # Copy author information if available
+            authors = self.book.get_metadata('DC', 'creator')
+            if authors:
+                for author in authors:
+                    new_book.add_author(author[0])
+
+            # Copy other DC metadata
+            dc_items = ['publisher', 'identifier', 'source', 'rights', 'coverage', 'date']
+            for item in dc_items:
+                values = self.book.get_metadata('DC', item)
+                if values:
+                    for value in values:
+                        new_book.add_metadata('DC', item, value[0])
+
+            logger.debug("Metadata copied successfully")
+        except Exception as e:
+            logger.error(f"Error copying metadata: {str(e)}")
+
     def create_translated_epub(
         self,
         translated_contents: List[Tuple[str, str]],
@@ -66,10 +94,7 @@ class EPUBService:
         logger.debug(f"Creating new EPUB at: {output_path}")
 
         # Copy metadata
-        for metadata in self.book.get_metadata():
-            if metadata[0] == 'DC':
-                name, value, extras = metadata[1]
-                new_book.add_metadata('DC', name, value, extras)
+        self.copy_metadata(new_book)
 
         # Copy resources (CSS, images, etc.)
         self.copy_resources(new_book)
