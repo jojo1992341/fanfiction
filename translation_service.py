@@ -39,7 +39,7 @@ class TranslationService:
             translatable_elements = self._extract_translatable_elements(soup)
             
             for element, text in translatable_elements:
-                translated_text = self._translate_text_with_retry(text)
+                translated_text = self.retry_handler.with_retry(self._translate_text)(text)
                 if translated_text and translated_text != text:
                     element.string = translated_text
 
@@ -68,11 +68,6 @@ class TranslationService:
                     elements.append((tag, text))
 
         return elements
-
-    @TranslationRetryHandler.with_retry
-    def _translate_text_with_retry(self, text: str) -> Optional[str]:
-        """Translate text with retry mechanism."""
-        return self._translate_text(text)
 
     def _translate_text(self, text: str) -> Optional[str]:
         """Translate a single text using Google Translate API."""
@@ -119,7 +114,7 @@ class TranslationService:
                 translated_text = (
                     self.translate_html_content(text)
                     if self._is_html_content(text)
-                    else self._translate_text_with_retry(text)
+                    else self.retry_handler.with_retry(self._translate_text)(text)
                 )
                 translated_batch.append(translated_text or text)
 
